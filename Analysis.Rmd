@@ -1,0 +1,457 @@
+---
+title: "Identifying the molecular mode of action of itraconazole in colorectal cancer"
+output:
+  html_notebook: default
+  word_document: default
+  editor_options: null
+    chunk_output_type: inline
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE,message=FALSE,warning=FALSE)
+```
+
+
+```{r}
+#Set global options for knitting to word
+options(echo=FALSE,message=FALSE,warning=FALSE)
+```
+
+
+# Introduction
+Colorectal cancer is the third most prominent cancer in the western world. Whilst treatments for colorectal cancer show success, the effectiveness is varied from patient to patient. One primary cause of this is dormancy within the tumour cells. When a tumour cell  encounters a hostile stimulus within its environment it can become dormant. Within this state the cell will not divide, and the cell also becomes clinically undetectable. The cell can eventually exit this state and start rapidly proliferating again, which can lead to recurrence of cancer. In order to fully treat colorectal cancer we must therefore identify ways to remove the dormancy of these cells. This study aims to test a compound known as itraconazole that disrupts the wnt signallling pathway, a pathway that has been found previously to be upregulated in cancer stem cells.
+
+In order to assess the effects of itraconazole treatment, its effect on gene expression in two cancerous cell lines: HT55 and SW948 was assessed.
+
+
+# Section 1: Quality analysis of the data
+The count data was downloaded for each sample in the form of multiple salmon quant files. The Salmon quant files where read into R and combined into a single object.
+```{r}
+#initialise the readr library for reading files into R
+library(readr)
+
+#read in the tx2gene.csv file which contains the ensembl id for each gene
+tx2gene = read.csv("GSE114013/tx2gene.csv")
+
+#read in the metadata for the study from the sampleinfo.txt file
+coldata = read.delim("GSE114013/meta_data/sampleinfo.txt")
+```
+
+
+```{r}
+#Creates a new object called dirs. This stores all file names in the GSE114013/salmon_quant directory
+samples = list.files("GSE114013/salmon_quant")
+
+#Files containing the count data need to be selected. These are all the quant.sf files
+#A new object is created called quant_files. This stores all files in the GSE114013/salmon_quant/ directory that contain quant.sf in the filename
+quant_files = list.files("GSE114013/salmon_quant/",pattern = "quant.sf", recursive = TRUE, full.names = TRUE)
+
+#Each file containing the count data is named quant.sf The files therefore need to be renamed to the sample that they contain the data for.
+#Changes the names of the files in quant_files to the names of the samples stored in the dirs object
+names(quant_files) = samples
+```
+
+The tximport package was then used to create a matrix containing each sample and the corresponding counts for each gene.
+```{r}
+#initialize the tximport library which allows us to combine all the salmon count files into one object
+library(tximport)
+
+#Creates a matrix called txi which contains the count data for all samples.
+#The count data is imported from the quant_files object 
+txi = tximport(quant_files,type="salmon",tx2gene = tx2gene,ignoreTxVersion = TRUE)
+```
+
+The package deseq2 was used to create a dataset combining the count data and metadata for each sample and storing it in a single object to allow for analysis.
+```{r}
+#DEseq2 is initialised so that a deseq dataset can be produced.
+library(DESeq2)
+
+#Create dds object containing all sample information and count data
+dds = DESeqDataSetFromTximport(txi, 
+                                colData = coldata,
+                                design = ~condition)
+```
+
+
+Quality analysis of the data helps ensure that the data follows a normal distrubution and that there is no error in sample labelling. A log2 transformation was performed to noramalise the data. 
+
+### Figure 1: Boxplot of normalised count data.
+```{r}
+#Normalise the count data with a log2 transformation.
+log_dds = rlog(dds)
+
+#Set x axis label size
+par(cex.axis= 0.8) 
+
+#Plot normalised count data
+boxplot(assay(log_dds), xlab = "", 
+        ylab = "log2 counts", 
+        las = 2, 
+        main = "Normalised distributions")
+
+#Add horizontal line through the medians
+abline(h=median(assay(log_dds)), col="green")
+```
+The boxplot shows that the medians for each sample line up, meaning the data has been normalised.
+
+In order to asses the variability between and within the sample groups a principle componant analysis (PCA) was used. This ensures that samples have been labelled correctly by giving a graphical overview of how similar each sample is relative to all other samples. Each sample group should occupy a distinct quadrant of the graph, with no overlap between samples of different groups.
+
+### Figure 2: PCA plot of the data
+```{r fig.width=7, fig.height=7}
+#The ggplot2 library is initialised to allow for further editing of graphs
+library(ggplot2)
+
+#A PCA plot of the normalised count data is created.
+#The intgroup is a vector containing the cell_line and condition of each sample to allow for full visualisation
+#The geom label function from ggplot2 is used to label samples.
+plotPCA(log_dds, intgroup=c("cell_line","condition")) + geom_label(aes(label = name)) + coord_fixed(xlim = c(-55,55), ylim = c(-20,20))
+```
+Each sample group occupys its own space and those within each group are close together on the plot. As a result there is a higher variance between each sample group and less variance within the groups.This suggests that samples have been labelled correctly. There is a large difference in expression between cell lines, so the experimental design should compare expression within both cell lines separately to avoid these differences interfering with results.
+
+In order to get a more detailed overview of similarity a cluster heatmap was produced. This assesses sample similarity by calculating the correlation of a sample relative to all other samples. Samples that are very similar produce deep red squares, and those that are highly dissimilar will produce blue squares. Distinct clusters of red should show up where samples of the same group are compared.
+
+### Figure 3: cluster heatmap showing the similarity of each samples relative to every other sample in the study
+```{r fig.width=6, fig.height=3}
+#intitialise pheatmap, a library that allows easy production of heatmaps
+library(pheatmap)
+
+#retrieve the normalised count data from the log_dds object
+assay = assay(log_dds)
+
+#Calculate correlations 
+assay_cor = cor(assay)
+
+#Retrieve metadata for annotations
+sampleinfo = as.data.frame(colData(dds)[,c('cell_line','condition')])
+
+#Generate heat map
+pheatmap(assay_cor, 
+         annotation = sampleinfo, 
+         annotation_row = sampleinfo)
+```
+Figure 3 shows distinct clustering in samples that are in the same group. It also appears that samples within the HT55 cell line have a high level of similarity despite whether they where treated with itraconazole. These samples still show slightly more similarity when compared to the same treatment group. SW948 samples show distinct clustering based on the treatment group. This gives an overview of what might be expected from the differential gene analysis. The SW948 cell line will likely show more deferentially expressed genes between conditions than the HT55 cell line.
+
+In order to assess the effects of the itraconazole treatment on each cell line, two subsets of the data where created; one for each cell line. The differential gene expression was then analysed between the treated and untreated samples within these two groups.
+
+# Section 2: Differential expression between HT55 itraconazole and DMSO treated cells
+
+The HT55 subset was created from the deseq dataset created in section 1.
+```{r}
+#Retrieve counts from HT55 cell line
+dds_ht55 = dds[,which(dds$cell_line == "HT55")]
+
+#Set the design to compare expression between conditionc
+design(dds_ht55) = ~condition
+
+#Use DESeq2 to analyse data
+de_HT55 = DESeq(dds_ht55)
+```
+
+A results table was generated containing the fold change for each gene, with the comparison being Iraconazole vs DMSO. 
+```{r}
+#Initialise dplyr to allow for data frame manipulation
+library(dplyr)
+
+#Intitialise tibble to allow simple table manipulation
+library(tibble)
+
+#Store results of analysis in a data frame with the first column being ensembl id
+results_ht55 = results(de_HT55) %>%
+  as.data.frame %>% 
+  rownames_to_column("ENSEMBL")  
+```
+
+
+```{r}
+#Library containing information for each human gene, including symbols and GO terms.
+library(org.Hs.eg.db)
+
+#Match the ensembl ids from the results with the symbols in the library.
+#This generates a new table containing the ensembl id and external gene names
+#Duplicated ids are filtered out
+anno = AnnotationDbi::select(org.Hs.eg.db,keys=results_ht55$ENSEMBL,
+              columns=c("ENSEMBL","SYMBOL","GENENAME","ENTREZID"),
+              keytype="ENSEMBL") %>% 
+  filter(!duplicated(ENSEMBL))
+```
+
+```{r}
+#Table with external gene symbols is joined to results
+#Results are arranged by adjusted p value
+HT55_annotated = left_join(results_ht55, anno,by="ENSEMBL") %>% 
+  arrange(padj)
+```
+In order to get an overview of the differential expression between the two groups a volcano plot was generated.
+
+### Figure 4: Volcano Plot showing itraconzole vs DMSO in HT55 cell line
+```{r fig.width=20, fig.height=20}
+#Retrieve the symbols of top 30 most significant results
+symb = HT55_annotated$SYMBOL[1:30]
+
+#Enhanced volcano library used to make volcano plot
+library(EnhancedVolcano)
+
+#plot graph, with top 30 genes labelled.
+EnhancedVolcano(HT55_annotated,
+                lab = HT55_annotated$SYMBOL,
+                selectLab = c(symb),
+                labSize = 8.0,
+                pointSize = 7.0,
+                title = "HT55 Itraconazole vs DMSO",
+                axisLabSize = 35,
+                titleLabSize = 50,
+                subtitle = " ",
+                x ='log2FoldChange',
+                y ='padj',
+                legendLabels=c('Not sig.','Log (base 2) FC','p-value',
+                                'p-value & Log (base 2) FC'),
+                legendPosition = 'right',
+                legendLabSize = 20,
+                legendIconSize = 10)
+```
+Figure 4 shows a volcano plot of log2 fold change against adjusted p value for each gene. Genes with a significant p value and fold change are highlighted in red. The top 30 most significant genes according to padj have been labelled where possible. Figure 5 shows that slightly more genes were significantly upregulated than downregulated. SLC26A3 was the most statistically significant upregulted gene and ANXA1 was the most significantly downregulated.
+
+A heatmap was generated from the count data.
+
+### Figure 5: Heatmap showing normalised counts for HT55 itraconazole and DMSO samples
+```{r fig.width=5, fig.height=5}
+#Initialise pheatmap if not done previously
+library(pheatmap)
+
+#Retrieve top 30 genes
+top_genes = HT55_annotated$ENSEMBL[1:30]
+
+#log2 transformation
+log_dds_ht55= rlog(dds_ht55)
+
+#Read in conditions for annotation
+sampleinfo = as.data.frame(colData(dds)['condition'])
+
+#Plot heatmap
+pheatmap(assay(log_dds_ht55)[top_genes,], fontsize = 7, cluster_rows = FALSE, clustering_distance_rows = FALSE, cellwidth = 30, cellheight = 7, labels_row = symb, annotation = sampleinfo)
+```
+Figure 5 shows a heatmap of the top 30 most significant genes. The degree of redness indicates the amount of expression of a gene in each sample. Deep red indicates high expression and deep blue indicates low expression. The heatmap shows that SLC26A3 was highly upregulated in the treated group compared to the untreated, which confirms what was observed in the volcano plot. ANXA1 also showed significantly less expression in the untreated compared to the treated group.
+
+# Section 3 Pathway analysis of HT55 cells
+Cluster profiling was used to match gene ontology terms to the results from the deseq analysis, giving the ratio of significant to non significant gene counts for each term (P < 0.05). This provides biological significance to the analysis.
+
+ 
+```{r}
+#initialise clusterprofiler library 
+library(clusterProfiler)
+
+#Pull entrezid of all genes 
+universe = HT55_annotated %>% pull(ENTREZID)
+
+#Pull entrezid of significantly different genes 
+sigGenes = HT55_annotated %>% 
+  filter(padj < 0.05, !is.na(ENTREZID)) %>% pull(ENTREZID)
+```
+
+
+
+```{r}
+#Create enrich_GO object with GO terms linked to entrezid from the org.Hs library
+enrich_HT55 = enrichGO(
+  gene= sigGenes,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENTREZID",
+  ont = "BP",
+  universe = universe,
+  qvalueCutoff = 0.05,
+  readable=TRUE
+)
+```
+
+A dotplot was created showing the results.
+
+### Figure 6: Dotplot showing gene ratio and significance for the top 10 GO terms
+```{r fig.width=6, fig.height=3}
+#Generate dotplot for top 10 GO terms
+dotplot(enrich_HT55, showCategory = 10, )
+```
+Figure 6 shows that the differentially expressed genes are involved in a range of pathways, including DNA replication and neutrophil activation. In order to assess how these pathways relate to one another an enrichment map was generated.
+
+### Figure 7: Enrichment map showing pathways linked between top 10 GO terms
+```{r}
+#Generate enrichment map of top 10 GO terms
+emapplot(enrich_HT55, showCategory = 10)
+```
+Figure 7 shows that the differentially expressed genes have linked functions in DNA replication and mitosis. Other processes are related to alcohol metabolism, neutrophil activation and vacuole organization.
+
+# Section 4: Analysis of the SW948 cell line
+A subset of the data was created for the SW948 cells. Analysis was performed as described in section 2.
+```{r}
+# create subset corresponding to just the SW948 cell line
+dds_SW948 = dds[,which(dds$cell_line == "SW948")]
+
+#Convert condition variable to a factor 
+dds_SW948$condition = as.factor(dds_SW948$condition)
+
+#Make sure the design is comparing condition
+design(dds_SW948) = ~condition
+
+## perform analysis
+de_SW948 = DESeq(dds_SW948)
+```
+
+
+```{r}
+#Initialise dplyr to allow for data frame manipulation
+library(dplyr)
+
+#Initialise tibble to allow for easy table manipulation
+library(tibble)
+
+#Create data frame of results from analysis
+results_SW948 = results(de_SW948) %>%
+  as.data.frame %>% 
+  rownames_to_column("ENSEMBL")  
+```
+
+
+```{r}
+#Initialise database containing gene symbols
+library(org.Hs.eg.db)
+
+#Match Ensembl ids from SW948 results to gene symbols
+#Remove duplicates
+anno = AnnotationDbi::select(org.Hs.eg.db,keys=results_SW948$ENSEMBL,
+              columns=c("ENSEMBL","SYMBOL","GENENAME","ENTREZID"),
+              keytype="ENSEMBL") %>% 
+  filter(!duplicated(ENSEMBL))
+```
+
+
+
+```{r}
+#Join gene symbols to the results table and arrange by padj
+SW948_annotated = left_join(results_SW948, anno,by="ENSEMBL") %>% 
+  arrange(padj)
+```
+
+A volcano plot was produced from the results.
+
+### Figure 8: Volcano plot of itraconazole treated vs DMSO SW948 cells
+```{r fig.width=17, fig.height=17}
+#Retrieve the symbols of top 30 most significant results
+symb = SW948_annotated$SYMBOL[1:30]
+
+#Enhanced volcano library used to make volcano plot
+library(EnhancedVolcano)
+
+#plot graph, with top 30 genes labelled.
+EnhancedVolcano(SW948_annotated,
+                lab = SW948_annotated$SYMBOL,
+                selectLab = c(symb),
+                labSize = 8.0,
+                pointSize = 7.0,
+                title = "SW948 Itraconazole vs DMSO",
+                axisLabSize = 35,
+                titleLabSize = 50,
+                subtitle = " ",
+                xlim = c(-10,10),
+                x ='log2FoldChange',
+                y ='padj',
+                legendLabels=c('Not sig.','Log (base 2) FC','p-value',
+                                'p-value & Log (base 2) FC'),
+                legendPosition = 'right',
+                legendLabSize = 20,
+                legendIconSize = 10)
+```
+Figure 8 shows a volcano plot of the comparison. The most significantly upregulated gene in the itraconazole treated group was MSMO1 whilst the most statistically significant downregulted gene was DBNL. It can be seen that there are a lot more differentially expressed genes in this cell line compared to HT55.
+
+Finally, in order to visualise the count data within each sample a heatmap was produced.
+
+### Figure 9: Heatmap showing normalised counts for SW948 itraconazole and DMSO samples
+```{r fig.width=5, fig.height=5}
+#Initialise the pheatmap library if not done already
+library(pheatmap)
+
+#Pull the top 30 most significant genes for annotation
+top_SW948 = SW948_annotated$ENSEMBL[1:30]
+
+#Log2 transformation on count data 
+log_dds_SW948 = rlog(dds_SW948)
+
+#retrieve coldata for annotation
+sampleinfo = as.data.frame(colData(dds)['condition'])
+
+#Plot heatmap from normalised count data
+pheatmap(assay(log_dds_SW948)[top_SW948,], 
+         fontsize = 5, 
+         cluster_rows = FALSE, 
+         clustering_distance_rows = FALSE, 
+         cellwidth = 30, 
+         cellheight = 7, 
+         annotation_col = sampleinfo, 
+         labels_row = symb)
+
+```
+Figure 9 shows that MSMO1 was highly expressed in itraconazole treated samples compared to the DMSO samples. DBNL can also be identified on the heatmap, which showed the most significant downregulation in the itraconazole treated group.
+
+# Section 5: SW948 Pathway analysis 
+In order to understand the biological significance of these results, a gene set enrichment analysis was conducted. GO terms where assigned to each gene and cluster profiling was used as described in section 3.
+```{r}
+#Initialise the cluster profiler library for performing analysis
+library(clusterProfiler)
+
+#Pull entrezid of all genes from results 
+universe = SW948_annotated %>% pull(ENTREZID)
+
+#Pull entrezid of all significant results
+sigGenes = SW948_annotated %>% 
+  filter(padj < 0.05, !is.na(ENTREZID)) %>% pull(ENTREZID)
+```
+
+```{r}
+#Create enrich_GO object with GO terms linked to entrezid from the org.Hs library
+enrich_SW948 = enrichGO(
+  gene= sigGenes,
+  OrgDb = org.Hs.eg.db,
+  keyType = "ENTREZID",
+  ont = "BP",
+  universe = universe,
+  qvalueCutoff = 0.05,
+  readable=TRUE
+)
+```
+
+### Figure 10: Dotplot showing GO terms from comparison between SW948 itraconazole and DMSO cells.
+```{r fig.width=8, fig.height=3}
+#Produce dotplot
+dotplot(enrich_SW948)
+```
+Figure 10 shows the gene ratio of the top 10 GO terms found. The size of each circle corresponds to the counts associated with that term, and the color indicates the adjusted P value. The most significant term was ncRNA metabolic process. In order to better identify how these terms interact within their pathways an enrichment map was produced.
+
+### Figure 11: Enrichment map showing top 10 GO terms in SW948 Itraconazole and DMSO cells
+```{r}
+#Produce enrichment map
+emapplot(enrich_SW948, showCategory = 10)
+```
+Figure 11 shows more interaction between pathways than those identified in the HT55 cell line. The most significant pathways include processes related ribosome biosynthesis and protein targeting.
+
+# Section 6: Comparing the differentially expressed genes between the two cell lines
+
+In order to gain an understanding of how many genes where deferentially expressed in both cell lines a venn diagram was produced:
+
+### Figure 12: A venn diagram showing difference in differentially expressed genes between the HT55 and SW948 cell lines
+```{r}
+#Create a data frame with two lists of differentially expressed genes to compare 
+venn_data = data.frame(HT55 = results_ht55$padj<0.05, SW948 = results_SW948$padj < 0.05)
+
+#initialise the limmma library for producing the venn diagram
+library(limma)
+
+#Plot data
+vennDiagram(venn_data)
+```
+Figure 12 suggests that 3649 genes where differentially expressed in both HT55 and SW948. Overall SW948 produced more significantly differentiallly expressed genes than HT55, leading to the conclusion that the itraconazole treatment had a greater effect on this cell line.
+
+
+
+
+
+
+
